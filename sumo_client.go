@@ -23,10 +23,12 @@ type SumoClient struct {
 
 // SearchJobRequest is the payload for creating a search job.
 type SearchJobRequest struct {
-	Query    string `json:"query"`
-	From     string `json:"from"`
-	To       string `json:"to"`
-	TimeZone string `json:"timeZone,omitempty"`
+	Query              string `json:"query"`
+	From               string `json:"from"`
+	To                 string `json:"to"`
+	TimeZone           string `json:"timeZone,omitempty"`
+	ByReceiptTime      bool   `json:"byReceiptTime,omitempty"`
+	RequireRawMessages bool   `json:"requireRawMessages,omitempty"`
 }
 
 // SearchJobResponse is returned when a search job is created.
@@ -104,9 +106,11 @@ type SearchLogsResult struct {
 }
 
 // SearchLogs creates a search job, polls until completion, fetches messages
-// and/or records, and deletes the job. The caller receives the result or an error.
-func (c *SumoClient) SearchLogs(query, from, to, timeZone string, limit int) (*SearchLogsResult, error) {
-	jobID, err := c.createSearchJob(query, from, to, timeZone)
+// or records depending on query type, and deletes the job.
+// The isAggregation flag must be true when the query contains aggregation operators
+// (count, sum, avg, max, min, group by, etc.) — these produce records, not messages.
+func (c *SumoClient) SearchLogs(query, from, to, timeZone string, limit int, isAggregation bool) (*SearchLogsResult, error) {
+	jobID, err := c.createSearchJob(query, from, to, timeZone, isAggregation)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +130,7 @@ func (c *SumoClient) SearchLogs(query, from, to, timeZone string, limit int) (*S
 
 		switch status.State {
 		case "DONE GATHERING RESULTS":
-			return c.fetchResults(jobID, limit, status)
+			return c.fetchResults(jobID, limit, isAggregation)
 		case "CANCELLED":
 			return nil, fmt.Errorf("search job was cancelled")
 		case "NOT STARTED", "GATHERING RESULTS":
@@ -137,27 +141,26 @@ func (c *SumoClient) SearchLogs(query, from, to, timeZone string, limit int) (*S
 	}
 }
 
-func (c *SumoClient) fetchResults(jobID string, limit int, status *SearchJobStatus) (*SearchLogsResult, error) {
+func (c *SumoClient) fetchResults(jobID string, limit int, isAggregation bool) (*SearchLogsResult, error) {
 	result := &SearchLogsResult{}
 
-	// Aggregation queries (e.g. "| count by foo") produce records
-	if status.RecordCount > 0 {
+	if isAggregation {
+		// Aggregation queries (e.g. "| count by foo") only produce records.
+		// The /messages endpoint returns 400 when requireRawMessages is false.
 		records, err := c.getSearchJobRecords(jobID, limit)
 		if err != nil {
 			return nil, err
 		}
 		result.Records = records
+		return result, nil
 	}
 
-	// Raw log queries produce messages
-	if status.MessageCount > 0 {
-		messages, err := c.getSearchJobMessages(jobID, limit)
-		if err != nil {
-			return nil, err
-		}
-		result.Messages = messages
+	// Raw log queries produce messages.
+	messages, err := c.getSearchJobMessages(jobID, limit)
+	if err != nil {
+		return nil, err
 	}
-
+	result.Messages = messages
 	return result, nil
 }
 
@@ -166,12 +169,13 @@ func (c *SumoClient) basicAuth() string {
 	return base64.StdEncoding.EncodeToString([]byte(creds))
 }
 
-func (c *SumoClient) createSearchJob(query, from, to, timeZone string) (string, error) {
+func (c *SumoClient) createSearchJob(query, from, to, timeZone string, isAggregation bool) (string, error) {
 	reqBody := SearchJobRequest{
-		Query:    query,
-		From:     from,
-		To:       to,
-		TimeZone: timeZone,
+		Query:              query,
+		From:               from,
+		To:                 to,
+		TimeZone:           timeZone,
+		RequireRawMessages: !isAggregation,
 	}
 	data, err := json.Marshal(reqBody)
 	if err != nil {

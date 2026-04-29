@@ -41,6 +41,39 @@ type sumoSearchTracesInput struct {
 	Limit       int    `json:"limit"`
 }
 
+// isAggregationQuery detects if a SumoLogic query uses aggregation operators
+// that produce records instead of raw messages.
+func isAggregationQuery(query string) bool {
+	lower := strings.ToLower(query)
+	ops := []string{
+		"| count", "count by", "count(",
+		"| sum", "sum(",
+		"| avg", "avg(",
+		"| min", "min(",
+		"| max", "max(",
+		"| group by", "groupby",
+		"| aggregate", "aggregate(",
+		"| transpose", "transpose(",
+		"| join", "join(",
+		"| timeslice", "timeslice(",
+		"| outlier", "outlier(",
+		"| formatDate", "formatDate(",
+		"| parseDate", "parseDate(",
+		"| first", "first(",
+		"| last", "last(",
+		"| most_recent", "most_recent(",
+		"| least_recent", "least_recent(",
+		"| compare", "compare(",
+		"| subquery", "subquery(",
+	}
+	for _, op := range ops {
+		if strings.Contains(lower, op) {
+			return true
+		}
+	}
+	return false
+}
+
 // Output type (all tools return text)
 type sumoTextOutput struct {
 	Text string `json:"text"`
@@ -69,7 +102,8 @@ func configureSumoTools(server *mcp.Server, handler *SumoToolHandler) {
 			limit = 10000
 		}
 
-		results, err := handler.client.SearchLogs(input.Query, from, to, input.TimeZone, limit)
+		isAgg := isAggregationQuery(input.Query)
+		results, err := handler.client.SearchLogs(input.Query, from, to, input.TimeZone, limit, isAgg)
 		if err != nil {
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Error searching logs: %v", err)}},
@@ -104,7 +138,8 @@ func configureSumoTools(server *mcp.Server, handler *SumoToolHandler) {
 		}
 
 		query := buildErrorTraceQuery(input.ServiceName, input.TraceID)
-		results, err := handler.client.SearchLogs(query, from, to, "", limit)
+		isAgg := isAggregationQuery(query)
+		results, err := handler.client.SearchLogs(query, from, to, "", limit, isAgg)
 		if err != nil {
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Error searching traces: %v", err)}},

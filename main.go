@@ -3,8 +3,10 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -14,28 +16,70 @@ func init() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 }
 
-func main() {
-	// Check for required environment variables
-	if os.Getenv("SLACK_TOKEN") == "" || os.Getenv("SLACK_COOKIE") == "" {
+var (
+	slackTokenFlag    string
+	slackCookieFlag   string
+	slackCookieDSFlag string
 
-		log.Println("Error: SLACK_TOKEN and SLACK_COOKIE environment variables are required")
-		log.Println("")
-		log.Println("To extract session credentials from Slack:")
-		log.Println("1. Open Slack in your browser (app.slack.com)")
-		log.Println("2. Open DevTools (F12) → Application → Storage → localStorage")
-		log.Println("3. Look for key starting with 'xoxc-' - this is your SLACK_TOKEN")
-		log.Println("4. Go to Application → Cookies → https://app.slack.com")
-		log.Println("5. Find cookie 'd' starting with 'xoxd-' - this is your SLACK_COOKIE")
-		log.Println("")
-		log.Println("Then run with:")
-		log.Println("  SLACK_TOKEN=xoxc-... SLACK_COOKIE=xoxd-... ./babel-fish")
-		os.Exit(1)
+	sumoAccessIDFlag  string
+	sumoAccessKeyFlag string
+	sumoBaseURLFlag   string
+)
+
+func initFlags() {
+	flag.StringVar(&slackTokenFlag, "slack-token", "", "Slack xoxc- session token")
+	flag.StringVar(&slackCookieFlag, "slack-cookie", "", "Slack xoxd- session cookie (value of cookie 'd')")
+	flag.StringVar(&slackCookieDSFlag, "slack-cookie-d-s", "", "Optional Slack SSO d-s cookie")
+
+	flag.StringVar(&sumoAccessIDFlag, "sumo-access-id", "", "SumoLogic Access ID")
+	flag.StringVar(&sumoAccessKeyFlag, "sumo-access-key", "", "SumoLogic Access Key")
+	flag.StringVar(&sumoBaseURLFlag, "sumo-base-url", "https://api.sumologic.com/api", "SumoLogic API base URL")
+
+	flag.Parse()
+
+	// Fall back to environment variables for backward compatibility
+	if slackTokenFlag == "" {
+		slackTokenFlag = os.Getenv("SLACK_TOKEN")
 	}
+	if slackCookieFlag == "" {
+		slackCookieFlag = os.Getenv("SLACK_COOKIE")
+	}
+	if slackCookieDSFlag == "" {
+		slackCookieDSFlag = os.Getenv("SLACK_COOKIE_D_S")
+	}
+	if sumoAccessIDFlag == "" {
+		sumoAccessIDFlag = os.Getenv("SUMO_ACCESS_ID")
+	}
+	if sumoAccessKeyFlag == "" {
+		sumoAccessKeyFlag = os.Getenv("SUMO_ACCESS_KEY")
+	}
+	if sumoBaseURLFlag == "" {
+		sumoBaseURLFlag = os.Getenv("SUMO_BASE_URL")
+	}
+}
 
-	// Create Slack client
-	client, err := NewSlackClient()
-	if err != nil {
-		log.Fatalf("Failed to create Slack client: %v", err)
+func main() {
+	initFlags()
+
+	// Validate that at least one service is configured
+	hasSlack := slackTokenFlag != "" && slackCookieFlag != ""
+	hasSumo := sumoAccessIDFlag != "" && sumoAccessKeyFlag != ""
+
+	if !hasSlack && !hasSumo {
+		log.Println("Error: At least one service must be configured (Slack or SumoLogic).")
+		log.Println("")
+		log.Println("Slack options (required to enable Slack tools):")
+		log.Println("  --slack-token      xoxc-... session token")
+		log.Println("  --slack-cookie     xoxd-... session cookie value")
+		log.Println("  --slack-cookie-d-s Optional SSO cookie")
+		log.Println("")
+		log.Println("SumoLogic options (required to enable SumoLogic tools):")
+		log.Println("  --sumo-access-id   SumoLogic Access ID")
+		log.Println("  --sumo-access-key  SumoLogic Access Key")
+		log.Println("  --sumo-base-url    SumoLogic API base URL (default: https://api.sumologic.com/api)")
+		log.Println("")
+		log.Println("Environment variables are also accepted for backward compatibility.")
+		os.Exit(1)
 	}
 
 	// Create MCP server
@@ -45,36 +89,68 @@ func main() {
 			Version: "1.0.0",
 		},
 		&mcp.ServerOptions{
-
-			Instructions: "Babel-fish Slack Session MCP Server\n\n" +
-				"This server provides access to Slack using browser session credentials.\n" +
-				"Available tools:\n" +
-				"- slack_list_channels: List accessible channels\n" +
-				"- slack_read_messages: Read messages from a channel\n" +
-				"- slack_read_thread: Read thread replies\n" +
-				"- slack_search_messages: Search across workspace\n" +
-				"- slack_get_permalink: Parse a Slack permalink\n\n" +
-				"Available resources:\n" +
-				"- slack://channels - List of all accessible channels\n" +
-				"- slack://channel/{id}/messages - Messages from a specific channel\n\n" +
-				"Note: Session cookies may expire. If authentication fails, re-extract credentials from your browser.",
+			Instructions: buildInstructions(),
 		},
 	)
 
-	// Configure tools
-	handler := NewToolHandler(client)
-	configureTools(server, handler)
+	// Configure Slack tools and resources if credentials provided
+	if hasSlack {
+		client, err := NewSlackClient(slackTokenFlag, slackCookieFlag, slackCookieDSFlag)
+		if err != nil {
+			log.Fatalf("Failed to create Slack client: %v", err)
+		}
+		handler := NewToolHandler(client)
+		configureTools(server, handler)
+		configureResources(server, client)
+		log.Println("[babel-fish] Slack tools enabled")
+	}
 
-	// Configure resources
-	configureResources(server, client)
+	// Configure SumoLogic tools if credentials provided
+	if hasSumo {
+		if sumoBaseURLFlag == "" {
+			sumoBaseURLFlag = "https://api.sumologic.com/api"
+		}
+		sumoClient, err := NewSumoClient(sumoAccessIDFlag, sumoAccessKeyFlag, sumoBaseURLFlag)
+		if err != nil {
+			log.Fatalf("Failed to create SumoLogic client: %v", err)
+		}
+		sumoHandler := NewSumoToolHandler(sumoClient)
+		configureSumoTools(server, sumoHandler)
+		log.Println("[babel-fish] SumoLogic tools enabled")
+	}
 
 	log.Println("[babel-fish] Starting MCP server on stdio")
-	log.Println("[babel-fish] SLACK_TOKEN present:", os.Getenv("SLACK_TOKEN") != "")
-	log.Println("[babel-fish] SLACK_COOKIE present:", os.Getenv("SLACK_COOKIE") != "")
-	log.Println("[babel-fish] SLACK_COOKIE_D_S present:", os.Getenv("SLACK_COOKIE_D_S") != "")
 
 	// Run using stdio transport
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
 }
+
+func buildInstructions() string {
+	var parts []string
+	parts = append(parts, "Babel-fish MCP Server\n")
+	parts = append(parts, "This server provides access to Slack and/or SumoLogic depending on the credentials supplied at startup.\n")
+
+	if slackTokenFlag != "" && slackCookieFlag != "" {
+		parts = append(parts, "Slack tools (browser session credentials):\n")
+		parts = append(parts, "- slack_list_channels: List accessible channels\n")
+		parts = append(parts, "- slack_read_messages: Read messages from a channel\n")
+		parts = append(parts, "- slack_read_thread: Read thread replies\n")
+		parts = append(parts, "- slack_search_messages: Search across workspace\n")
+		parts = append(parts, "- slack_get_permalink: Parse a Slack permalink\n")
+		parts = append(parts, "Resources:\n")
+		parts = append(parts, "- slack://channels - List of all accessible channels\n")
+		parts = append(parts, "- slack://channel/{id}/messages - Messages from a specific channel\n")
+		parts = append(parts, "Note: Session cookies may expire. If authentication fails, re-extract credentials from your browser.\n")
+	}
+
+	if sumoAccessIDFlag != "" && sumoAccessKeyFlag != "" {
+		parts = append(parts, "SumoLogic tools:\n")
+		parts = append(parts, "- sumo_search_logs: Search logs with a query and time range\n")
+		parts = append(parts, "- sumo_search_error_traces: Search for errors and stack traces\n")
+	}
+
+	return strings.Join(parts, "\n")
+}
+

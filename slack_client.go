@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 )
@@ -22,23 +21,21 @@ type SlackClient struct {
 	baseURL    string
 }
 
-// NewSlackClient creates a new client from environment variables
-func NewSlackClient() (*SlackClient, error) {
-	token := os.Getenv("SLACK_TOKEN")
+// NewSlackClient creates a new client from the provided session credentials.
+func NewSlackClient(token, cookie, cookieDS string) (*SlackClient, error) {
 	if token == "" {
-		return nil, fmt.Errorf("SLACK_TOKEN environment variable is required")
+		return nil, fmt.Errorf("slack token is required")
 	}
 
-	cookie := os.Getenv("SLACK_COOKIE")
 	if cookie == "" {
-		return nil, fmt.Errorf("SLACK_COOKIE environment variable is required")
+		return nil, fmt.Errorf("slack cookie is required")
 	}
 
 	return &SlackClient{
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		token:      token,
 		cookie:     cookie,
-		cookieDS:   os.Getenv("SLACK_COOKIE_D_S"),
+		cookieDS:   cookieDS,
 		baseURL:    "https://slack.com/api/",
 	}, nil
 }

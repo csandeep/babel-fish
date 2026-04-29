@@ -1,14 +1,24 @@
 # babel-fish 🐠
 
-A Slack MCP server that authenticates using browser session credentials, enabling non-admin users to read Slack messages through AI dev tools like Crush.
+A multi-service MCP server for Slack and SumoLogic, enabling AI dev tools like Crush to query messages, logs, and error traces.
 
 > *The babel fish is small, yellow, leech-like, and probably the oddest thing in the universe. It translates any spoken language to the language of the listener.* — Douglas Adams
 
-## Why babel-fish?
+## Services
 
-Official Slack MCP servers require a bot token (`xoxb-`), which needs workspace admin approval. Babel-fish uses your existing browser session credentials (`xoxc-` token + `xoxd-` cookie), so any Slack user can read messages without admin intervention.
+babel-fish is modular: you configure whichever service(s) you need via CLI flags or environment variables. At least one service must be configured.
+
+### Slack
+
+Authenticates using browser session credentials, enabling non-admin users to read Slack messages without workspace admin approval.
+
+### SumoLogic
+
+Authenticates with Access ID + Access Key to query logs, search for error traces, and inspect stack dumps.
 
 ## Tools
+
+### Slack
 
 | Tool | Description | Slack API |
 |------|-------------|----------|
@@ -18,7 +28,7 @@ Official Slack MCP servers require a bot token (`xoxb-`), which needs workspace 
 | `slack_search_messages` | Search messages across workspace | `search.messages` |
 | `slack_get_permalink` | Parse a Slack permalink URL | URL parsing |
 
-### Tool Parameters
+#### Slack Tool Parameters
 
 | Tool | Parameter | Type | Default | Description |
 |------|-----------|------|---------|-------------|
@@ -35,6 +45,30 @@ Official Slack MCP servers require a bot token (`xoxb-`), which needs workspace 
 | | `count` | int | 20 | Max results to return |
 | `slack_get_permalink` | `url` | string | — | Slack permalink URL |
 
+### SumoLogic
+
+| Tool | Description |
+|------|-------------|
+| `sumo_search_logs` | Search logs with a SumoLogic query and time range |
+| `sumo_search_error_traces` | Search for errors, exceptions, and stack traces |
+
+#### SumoLogic Tool Parameters
+
+| Tool | Parameter | Type | Default | Description |
+|------|-----------|------|---------|-------------|
+| `sumo_search_logs` | `query` | string | — | SumoLogic query string |
+| | `from` | string | — | Start time (ISO-8601, e.g. `2024-01-01T00:00:00Z`) |
+| | `to` | string | — | End time (ISO-8601) |
+| | `time_range` | string | — | Relative range: `15m`, `1h`, `1d`, `7d`, `1w` |
+| | `time_zone` | string | — | IANA time zone (e.g. `UTC`) |
+| | `limit` | int | 100 | Max messages to return (max 10,000) |
+| `sumo_search_error_traces` | `service_name` | string | — | Filter by `_sourceCategory` |
+| | `trace_id` | string | — | Search for a specific trace ID |
+| | `from` | string | — | Start time (ISO-8601) |
+| | `to` | string | — | End time (ISO-8601) |
+| | `time_range` | string | — | Relative range: `15m`, `1h`, `1d`, `7d`, `1w` |
+| | `limit` | int | 100 | Max messages to return (max 10,000) |
+
 ## Resources
 
 | URI | Description |
@@ -44,79 +78,86 @@ Official Slack MCP servers require a bot token (`xoxb-`), which needs workspace 
 
 ## Setup
 
-### 1. Extract Session Credentials
-
-#### Get the `xoxc-` token (SLACK_TOKEN)
-
-1. Open Slack in your browser: `https://app.slack.com`
-2. Open DevTools (F12) → **Application** tab
-3. Go to **Storage** → **Local Storage** → `https://app.slack.com`
-4. Find the key starting with `local_teams_v1_`
-5. The value is JSON. Look for your team ID key, then find the `"token"` field inside it — that's your `xoxc-` token
-
-Alternative (easier):
-
-1. Open Slack in your browser
-2. Open DevTools → **Network** tab
-3. Reload the page
-4. Look for any API call to `slack.com/api/`
-5. In the request headers, find `Authorization: Bearer xoxc-...` — the token value is your `SLACK_TOKEN`
-
-#### Get the `xoxd-` cookie (SLACK_COOKIE)
-
-1. Still in DevTools → **Application** tab
-2. Go to **Storage** → **Cookies** → `https://app.slack.com`
-3. Find the cookie named `d`
-4. Its value starts with `xoxd-` — this is your `SLACK_COOKIE`
-
-#### For SSO workspaces (optional)
-
-If your workspace uses SSO, you may also need the `d-s` cookie:
-
-1. In the same cookies list, find the cookie named `d-s`
-2. Set it as `SLACK_COOKIE_D_S`
-
-### 2. Build
+### 1. Build
 
 ```bash
 cd babel-fish
 go build -o babel-fish .
 ```
 
+### 2. Configure Credentials
+
+#### Slack Credentials
+
+Open Slack in your browser (`https://app.slack.com`) and use DevTools to extract:
+
+- **`xoxc-` token** — best found in DevTools **Network** tab by looking at any `slack.com/api/` request's `Authorization: Bearer xoxc-...` header.
+- **`xoxd-` cookie** — from **Application → Cookies → https://app.slack.com**, look for cookie `d`.
+- **(Optional) `d-s` cookie** — for SSO workspaces, also from the Cookies list.
+
+#### SumoLogic Credentials
+
+- **Access ID** — from SumoLogic → Administration → Security → Access Keys
+- **Access Key** — generated alongside the Access ID
+- **Base URL** — defaults to `https://api.sumologic.com/api`. Use your region-specific endpoint if needed (see [SumoLogic docs](https://help.sumologic.com/APIs/General-API-Information/Sumo-Logic-Endpoints-and-Firewall-Security)).
+
 ### 3. Configure Crush
 
 Add to `~/.config/crush/crush.json`:
 
-```json
-{
-  "mcpServers": {
-    "babel-fish": {
-      "command": "/path/to/babel-fish/babel-fish",
-      "env": {
-        "SLACK_TOKEN": "xoxc-...",
-        "SLACK_COOKIE": "xoxd-..."
-      }
-    }
-  }
-}
-```
-
-For SSO workspaces, add the `d-s` cookie:
+#### Slack only
 
 ```json
 {
   "mcpServers": {
     "babel-fish": {
       "command": "/path/to/babel-fish/babel-fish",
-      "env": {
-        "SLACK_TOKEN": "xoxc-...",
-        "SLACK_COOKIE": "xoxd-...",
-        "SLACK_COOKIE_D_S": "xoxd-s-..."
-      }
+      "args": [
+        "--slack-token", "xoxc-...",
+        "--slack-cookie", "xoxd-..."
+      ]
     }
   }
 }
 ```
+
+#### SumoLogic only
+
+```json
+{
+  "mcpServers": {
+    "babel-fish": {
+      "command": "/path/to/babel-fish/babel-fish",
+      "args": [
+        "--sumo-access-id", "suABCDEF123...",
+        "--sumo-access-key", "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+      ]
+    }
+  }
+}
+```
+
+#### Both Slack and SumoLogic
+
+```json
+{
+  "mcpServers": {
+    "babel-fish": {
+      "command": "/path/to/babel-fish/babel-fish",
+      "args": [
+        "--slack-token", "xoxc-...",
+        "--slack-cookie", "xoxd-...",
+        "--sumo-access-id", "suABCDEF123...",
+        "--sumo-access-key", "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+      ]
+    }
+  }
+}
+```
+
+For SSO workspaces, also add `--slack-cookie-d-s` to the args.
+
+Environment variables are accepted for backward compatibility: `SLACK_TOKEN`, `SLACK_COOKIE`, `SLACK_COOKIE_D_S`, `SUMO_ACCESS_ID`, `SUMO_ACCESS_KEY`, `SUMO_BASE_URL`.
 
 ## CLI Usage
 
@@ -124,20 +165,16 @@ Since babel-fish is an MCP server that communicates over stdio using the JSON-RP
 
 ### MCP Inspector (recommended for exploration)
 
-Interactive web UI for browsing and calling tools:
-
 ```bash
 npx @modelcontextprotocol/inspector \
-  -e SLACK_TOKEN=xoxc-... \
-  -e SLACK_COOKIE=xoxd-... \
+  -e SUMO_ACCESS_ID=suABCDEF123... \
+  -e SUMO_ACCESS_KEY=... \
   /path/to/babel-fish
 ```
 
 Opens a web UI at `http://localhost:6274` where you can list tools, browse resources, and invoke them interactively.
 
 ### mcp-cli (Python)
-
-Command-line client for scripted usage:
 
 ```bash
 pip install mcp-cli
@@ -150,10 +187,10 @@ Create a config file `mcp_config.json`:
   "mcpServers": {
     "babel-fish": {
       "command": "/path/to/babel-fish",
-      "env": {
-        "SLACK_TOKEN": "xoxc-...",
-        "SLACK_COOKIE": "xoxd-..."
-      }
+      "args": [
+        "--sumo-access-id", "suABCDEF123...",
+        "--sumo-access-key", "..."
+      ]
     }
   }
 }
@@ -161,13 +198,6 @@ Create a config file `mcp_config.json`:
 
 ```bash
 mcp-cli --config mcp_config.json
-```
-
-### fastmcp (Python)
-
-```bash
-pip install fastmcp
-fastmcp-client /path/to/babel-fish
 ```
 
 ### Raw JSON-RPC (zero dependencies)
@@ -178,65 +208,17 @@ Pipe JSON-RPC requests to babel-fish's stdin. Each request is one line:
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"1.0"}}}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
-  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"slack_list_channels","arguments":{"types":"public_channel,private_channel","limit":10}}}' \
-  | SLACK_TOKEN=xoxc-... SLACK_COOKIE=xoxd-... ./babel-fish
-```
-
-This sends three requests: initialize the session, list available tools, and call `slack_list_channels`. Responses are written to stdout as JSON-RPC.
-
-#### Example: Read messages from a channel
-
-```bash
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"1.0"}}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"slack_read_messages","arguments":{"channel_id":"C01234567","limit":25}}}' \
-  | SLACK_TOKEN=xoxc-... SLACK_COOKIE=xoxd-... ./babel-fish
-```
-
-#### Example: Search messages
-
-```bash
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"1.0"}}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"slack_search_messages","arguments":{"query":"deploy failed","count":10}}}' \
-  | SLACK_TOKEN=xoxc-... SLACK_COOKIE=xoxd-... ./babel-fish
-```
-
-#### Example: Read a resource
-
-```bash
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"1.0"}}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"slack://channels"}}' \
-  | SLACK_TOKEN=xoxc-... SLACK_COOKIE=xoxd-... ./babel-fish
-```
-
-### From Go (programmatic)
-
-```go
-import "github.com/modelcontextprotocol/go-sdk/mcp"
-
-client := mcp.NewClient(&mcp.Implementation{Name: "my-cli", Version: "1.0"})
-transport := mcp.NewCommandTransport("./babel-fish")
-session, _ := client.Connect(context.Background(), transport)
-
-// List tools
-tools, _ := session.ListTools(context.Background())
-
-// Call a tool
-result, _ := session.CallTool(context.Background(), &mcp.CallToolParams{
-    Name: "slack_search_messages",
-    Arguments: map[string]any{"query": "incident", "count": 5},
-})
-fmt.Println(result.Content)
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sumo_search_logs","arguments":{"query":"error","time_range":"1h","limit":10}}}' \
+  | ./babel-fish --sumo-access-id suABCDEF123... --sumo-access-key ...
 ```
 
 ## Security Notes
 
-- **These are your full user session credentials.** Anyone with them can act as you on Slack.
-- Session cookies expire. If you get auth errors, re-extract credentials from your browser.
+- **Slack credentials are your full user session.** Anyone with them can act as you on Slack.
+- **SumoLogic credentials grant full API access.** Treat them like passwords.
+- Session cookies expire. If authentication fails, re-extract credentials.
 - Never commit credentials to version control or share them.
-- Babel-fish never logs your credentials.
+- babel-fish never logs your credentials.
 
 ## License
 

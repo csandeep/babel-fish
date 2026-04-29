@@ -1,4 +1,4 @@
-module babel-fish
+module github.com/csandeep/babel-fish
 
 go 1.26.2
 
